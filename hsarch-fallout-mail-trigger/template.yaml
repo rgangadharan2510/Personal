@@ -1,0 +1,157 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SAM Template for hsarch-fallout-mail-trigger
+  By :- Ayush Kumar
+
+Globals:
+  Function:
+    Timeout: 300
+    MemorySize: 128
+
+Parameters:
+  Subnets:
+    Description: Subnets for lambda
+    Type: CommaDelimitedList
+    Default: subnet-0419ee49cb88df4bb
+  SecurityGroupIds:
+    Description: Security Group Ids for lambda
+    Type: CommaDelimitedList
+    Default: sg-0f9e4dfc04ceba8d6
+  ImageTag:
+    Type: String
+    Description: Docker Image tag
+    Default: v1
+
+
+Resources:
+  hsarchfalloutmailtrigger:
+    Type: AWS::Serverless::Function
+    DependsOn: LambdaRole
+    Properties:
+      PackageType: Image
+      FunctionName: hsarch-fallout-mail-trigger
+      Architectures:
+        - x86_64
+      Role:  !GetAtt LambdaRole.Arn
+      VpcConfig:
+        SecurityGroupIds: !Ref SecurityGroupIds
+        SubnetIds: !Ref Subnets
+      ImageConfig:
+        Command: [ "src.lambda_function.lambda_handler" ]
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: .
+      DockerTag: !Ref ImageTag
+
+  LambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: hsarch-fallout-sqs-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'sqs:*'
+                Resource: 'arn:aws:sqs:us-east-2:257676781382:hsarch-fallout-standard-queue'
+        - PolicyName: hsarch-CW-createloggroup-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:257676781382:*'
+        - PolicyName: hsarch-CW-createlogstream-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:257676781382:log-group:/aws/lambda/hsarch-fallout-mail-trigger:*'
+        - PolicyName: hsarch-VPCforlambda-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ec2:DescribeNetworkInterfaces'
+                  - 'ec2:CreateNetworkInterface'
+                  - 'ec2:DeleteNetworkInterface'
+                  - 'ec2:DescribeInstances'
+                  - 'ec2:AttachNetworkInterface'
+                Resource: '*'
+
+  SchedulerScheduleRole:
+    Type: AWS::IAM::Role
+    DependsOn: hsarchfalloutmailtrigger
+    Properties:
+      Description: your-description
+      RoleName: hsarch-scheduler-lambda-invoke
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - scheduler.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeFalloutLambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: "lambda:InvokeFunction"
+                Resource:
+                  Fn::GetAtt:
+                    - hsarchfalloutmailtrigger
+                    - Arn
+
+  LambdaSchedule:
+    Type: AWS::Scheduler::Schedule
+    DependsOn:
+    - hsarchfalloutmailtrigger
+    - SchedulerScheduleRole
+    Properties:
+      Description: Trigger hsarch-fallout-mail-trigger-lambda
+      Name: hsarch-fallout-mail-trigger-schedule
+      FlexibleTimeWindow:
+        Mode: "FLEXIBLE"
+        MaximumWindowInMinutes: 10
+      ScheduleExpressionTimezone: Asia/Kolkata
+      ScheduleExpression: "cron(0 11 * * ? *)"
+      State: "ENABLED"
+      Target:
+        Arn:
+          Fn::GetAtt:
+            - hsarchfalloutmailtrigger
+            - Arn
+        RoleArn:
+          Fn::GetAtt:
+            - SchedulerScheduleRole
+            - Arn
+
+
+Outputs:
+  hsarchfalloutmailtrigger:
+    Description: "hsarchfalloutmailtrigger lambda Function ARN"
+    Value: !GetAtt hsarchfalloutmailtrigger.Arn
+  LambdaRole:
+    Description: "Implicit IAM Role created for LambdaRole"
+    Value: !GetAtt LambdaRole.Arn

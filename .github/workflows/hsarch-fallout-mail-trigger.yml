@@ -1,0 +1,76 @@
+name: hsarchfalloutmailtrigger-SAM-pipeline
+
+on:
+  push:
+    branches:
+      - 'master'
+      - 'feature**'
+    paths:
+      - 'hsarch-fallout-mail-trigger/**'
+  workflow_dispatch:
+    inputs:
+      isTrigger:
+        type: boolean
+        description: 'Trigger the workflow'
+        default: false
+
+env:
+  # Default Environment Variables
+  SAM_TEMPLATE: template.yaml
+  PIPELINE_EXECUTION_ROLE: arn:aws:iam::257676781382:role/hsarch-build-infra
+  CLOUDFORMATION_EXECUTION_ROLE: arn:aws:iam::257676781382:role/hsarch-build-infra
+  IMAGE_TAG: ${{ github.sha }}
+
+  # OHIO Environment Variables
+  STACK_NAME: hsarch-fallout-mail-trigger
+  IMAGE_REPOSITORY: 257676781382.dkr.ecr.us-east-2.amazonaws.com/hsarch-fallout-mail-trigger
+  REGION: us-east-2
+  ARTIFACTS_BUCKET: hsarch-artifactory-257676781382-us-east-2
+
+
+permissions:
+  id-token: write
+  contents: read
+jobs:
+
+  build-and-test-feature:
+    if: startsWith(github.ref, 'refs/heads/feature')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - run: sam build --debug
+        working-directory: ./hsarch-fallout-mail-trigger
+        
+    
+  build-and-deploy:
+    if: startsWith(github.repository, 'SearsHomeServices/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Assume the pipeline user role
+        uses: aws-actions/configure-aws-credentials@v1-node16
+        with:
+          aws-region: ${{ env.REGION }}
+          role-to-assume: ${{ env.PIPELINE_EXECUTION_ROLE }}
+          role-session-name: deployment
+          role-duration-seconds: 3600
+          role-skip-session-tagging: true
+          
+      - name: Build resources
+        run: sam build --debug
+        working-directory: ./hsarch-fallout-mail-trigger
+        
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Deploy to us-east-2
+        run: sam deploy --stack-name ${STACK_NAME} --capabilities CAPABILITY_NAMED_IAM --region ${REGION} --no-fail-on-empty-changeset --image-repositories hsarchfalloutmailtrigger=${IMAGE_REPOSITORY} --parameter-overrides "SecurityGroupIds=sg-0c37a80d7ad4786b4" "Subnets=subnet-0942d4e5e58f733e2,subnet-012344d2e071d6770,subnet-0f080e257d72e48d4" "ImageTag=${IMAGE_TAG}"
+        working-directory: ./hsarch-fallout-mail-trigger

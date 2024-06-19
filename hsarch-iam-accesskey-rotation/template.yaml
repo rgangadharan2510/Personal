@@ -1,0 +1,199 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SAM Template for hsarch-iam-accesskey-rotation
+  By :- Ayush Kumar
+
+Globals:
+  Function:
+    Timeout: 300
+    MemorySize: 128
+
+Parameters:
+  Subnets:
+    Description: Subnets for lambda
+    Type: CommaDelimitedList
+    Default: subnet-0419ee49cb88df4bb
+  SecurityGroupIds:
+    Description: Security Group Ids for lambda
+    Type: CommaDelimitedList
+    Default: sg-0f9e4dfc04ceba8d6
+
+Resources:
+  hsarchiamaccesskeyrotation:
+    Type: AWS::Serverless::Function
+    DependsOn: LambdaRole
+    Properties:
+      PackageType: Image
+      FunctionName: hsarch-iamaccessKey-rotation
+      Architectures:
+        - x86_64
+      Role:  !GetAtt LambdaRole.Arn
+      VpcConfig:
+        SecurityGroupIds: !Ref SecurityGroupIds
+        SubnetIds: !Ref Subnets
+      ImageConfig:
+        Command: [ "src.index.lambda_handler" ]
+      Environment:
+        Variables:
+          EXPIRATION_TIME: '15'
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: .
+      DockerTag: v1
+
+  LambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub 'hsarch-iamaccesskey-rotation-role-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: hsarch-fallout-sqs-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'sqs:*'
+                Resource: 'arn:aws:sqs:us-east-2:257676781382:hsarch-fallout-standard-queue'
+        - PolicyName: hsarch-dynamodb-data-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:GetItem'
+                  - 'dynamodb:Query'
+                Resource: 'arn:aws:dynamodb:us-east-2:257676781382:table/hsarch-iam-accesskey-rotation-metadata'
+        - PolicyName: hsarch-CW-createloggroup-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:257676781382:*'
+        - PolicyName: hsarch-CW-createlogstream-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:257676781382:log-group:/aws/lambda/hsarch-iamaccessKey-rotation:*'
+        - PolicyName: hsarch-assumerole-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'sts:AssumeRole'
+                Resource: 'arn:aws:iam::*:role/hsarch-IamAccessKeyRotator-ExecutionRole'
+        - PolicyName: hsarch-VPCforlambda-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ec2:DescribeNetworkInterfaces'
+                  - 'ec2:CreateNetworkInterface'
+                  - 'ec2:DeleteNetworkInterface'
+                  - 'ec2:DescribeInstances'
+                  - 'ec2:AttachNetworkInterface'
+                Resource: '*'
+        - PolicyName: hsarch-expirationdyndb-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:*'
+                Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:257676781382:table/hsarch-iam-accesskey-rotation-expiration-check'
+
+  EventBridgeRule:
+    Type: AWS::Events::Rule
+    DependsOn: hsarchiamaccesskeyrotation
+    Properties:
+      EventBusName: hsarch-EventBus-IAMAccessKeyRotation
+      EventPattern:
+        source:
+          - aws.securityhub
+        detail-type:
+          - Security Hub Findings - Imported
+        detail:
+          findings:
+            GeneratorId:
+              - security-control/IAM.3
+              - aws-foundational-security-best-practices/v/1.0.0/IAM.3
+            Compliance:
+              Status:
+                - FAILED
+      Targets:
+        - Arn:
+            Fn::GetAtt:
+              - "hsarchiamaccesskeyrotation"
+              - "Arn"
+          Id: "hsarchiamaccesskeyrotationID"
+
+
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    DependsOn: EventBridgeRule
+    Properties:
+      FunctionName:
+        Ref: "hsarchiamaccesskeyrotation"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn:
+        Fn::GetAtt:
+          - "EventBridgeRule"
+          - "Arn"
+
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: "hsarch-iam-accesskey-rotation-expiration-check"
+      BillingMode: "PAY_PER_REQUEST"
+      AttributeDefinitions:
+        - AttributeName: "IAMUserARN"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "IAMUserARN"
+          KeyType: "HASH"
+      TimeToLiveSpecification:
+        AttributeName: "ExpirationTime"
+        Enabled: True
+      Tags:
+        - Key: "APPACCESS"
+          Value: "hsarch"
+        - Key: "GROUP"
+          Value: "shs-hsarch"
+        - Key: "Project"
+          Value: "iam-accesskey-rotation"
+        - Key: "Environment"
+          Value: "shared"
+        - Key: "COSTCENTER"
+          Value: "35027"
+
+
+Outputs:
+  hsarchiamaccesskeyrotation:
+    Description: "hsarchiamaccesskeyrotation lambda Function ARN"
+    Value: !GetAtt hsarchiamaccesskeyrotation.Arn
+  LambdaRole:
+    Description: "Implicit IAM Role created for LambdaRole"
+    Value: !GetAtt LambdaRole.Arn
+  DynamoDBTable:
+    Description: "DynamoDB table to store IAM notification details"
+    Value: !GetAtt DynamoDBTable.Arn
+

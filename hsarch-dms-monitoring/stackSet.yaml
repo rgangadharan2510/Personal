@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'Target Account: CFT that sets up the ROLE for DMS Monitoring Lambda in different accounts'
+Parameters:
+  APPACCESS:
+    Description: APPACCESS TAG
+    Type: String
+    Default: hsarch
+  GROUP:
+    Description: GROUP TAG
+    Type: String
+    Default: shs-hsarch
+  COSTCENTER:
+    Description: COSTCENTER TAG
+    Type: String
+    Default: '35027'
+  PROJECT:
+    Description: PROJECT TAG
+    Type: String
+    Default: 'dms-monitoring'
+  Environment:
+    Description: Environment TAG
+    Type: String
+    Default: shared
+  SourceAccountNo:
+    Description: AWS Account No. owning the DMS Monitoring solution
+    Type: String
+    Default: '257676781382'
+Resources:
+  DMSMonitoringExecutionRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: !Sub "${APPACCESS}-DMSMonitoring-ExecutionRole"
+      Description: "Role to get the DMS details"
+      Path: "/"
+      AssumeRolePolicyDocument: !Sub
+          - >
+            {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Principal": {
+                    "AWS": "arn:aws:iam::${SourceAccountNo}:role/hsarch-SR-Lambda-DMSMonitoring",
+                    "AWS": "arn:aws:sts::257676781382:assumed-role/hsarch-SR-Lambda-DMSMonitoring/hsarch-dms-monitoring",
+                    "Service":"lambda.amazonaws.com"
+                  },
+                  "Action": "sts:AssumeRole"
+                }
+              ]
+            }
+          - SourceAccountNo: !Ref SourceAccountNo
+            APPACCESS: !Ref APPACCESS
+      MaxSessionDuration: 3600
+  DMSMonitoringPolicy:
+    Type: "AWS::IAM::Policy"
+    Properties:
+      PolicyName: !Sub "${APPACCESS}-DMSFetchDetails-Policy"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'dms:ListTagsForResource'
+              - 'dms:DescribeReplicationTasks'
+            Resource: '*'
+      Roles:
+        - !Ref DMSMonitoringExecutionRole

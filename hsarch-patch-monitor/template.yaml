@@ -1,0 +1,161 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SAM Template for hsarch-patch-monitor
+  By :- Rahul Gangadharan
+
+Globals:
+  Function:
+    Timeout: 300
+    MemorySize: 128
+
+Parameters:
+  Subnets:
+    Description: Subnets for lambda
+    Type: CommaDelimitedList
+    Default: subnet-0419ee49cb88df4bb
+  SecurityGroupIds:
+    Description: Security Group Ids for lambda
+    Type: CommaDelimitedList
+    Default: sg-0f9e4dfc04ceba8d6
+
+Resources:
+  hsarchpatchmonitor:
+    Type: AWS::Serverless::Function
+    DependsOn: LambdaRole
+    Properties:
+      PackageType: Image
+      FunctionName: hsarch-patch-monitor
+      Architectures:
+        - x86_64
+      Role:  !GetAtt LambdaRole.Arn
+      VpcConfig:
+        SecurityGroupIds: !Ref SecurityGroupIds
+        SubnetIds: !Ref Subnets
+      ImageConfig:
+        Command: [ "src.index.lambda_handler" ]
+      Environment:
+        Variables:
+          EXPIRATION_TIME: '15'
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: .
+      DockerTag: v1
+
+  LambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub 'hsarch-patch-monitor-role-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: hsarch-CW-createloggroup-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:257676781382:*'
+        - PolicyName: hsarch-CW-createlogstream-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:257676781382:log-group:/aws/lambda/hsarch-patch-monitor:*'
+        - PolicyName: hsarch-assumerole-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'sts:AssumeRole'
+                Resource: 'arn:aws:iam::*:role/hsarch-patch-monitor'
+        - PolicyName: hsarch-VPCforlambda-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ec2:DescribeNetworkInterfaces'
+                  - 'ec2:CreateNetworkInterface'
+                  - 'ec2:DeleteNetworkInterface'
+                  - 'ec2:DescribeInstances'
+                  - 'ec2:AttachNetworkInterface'
+                Resource: '*'
+  EventBridgeBus:
+    Type: AWS::Events::EventBus
+    DependsOn: hsarchpatchmonitor
+    Properties:
+      Name: hsarch-EventBus-patchmonitor
+  EventBusPolicy:
+    Type: AWS::Events::EventBusPolicy
+    DependsOn: EventBridgeBus
+    Properties:
+      StatementId: allow_account_to_put_events
+      EventBusName: hsarch-EventBus-patchmonitor
+      Statement:
+        Effect: "Allow"
+        Principal:
+          AWS: "arn:aws:iam::523140806637:root"
+        Action: "events:PutEvents"
+        Resource: !Sub 'arn:aws:events:${AWS::Region}:257676781382:event-bus/hsarch-EventBus-patchmonitor'
+  EventBridgeRule:
+    Type: AWS::Events::Rule
+    DependsOn: EventBridgeBus
+    Properties:
+      EventBusName: hsarch-EventBus-patchmonitor
+      EventPattern:
+        source:
+          - aws.ssm
+        detail-type:
+          - EC2 State Manager Association State Change
+        detail:
+          association-name:
+            - wildcard:
+                "AWS-QuickSetup-PatchPolicy-InstallPatches-*"
+          status:
+            - Failed
+            - Success
+        resources:
+          - !Sub 'arn:aws:ssm:${AWS::Region}::document/AWS-RunPatchBaseline'
+      Targets:
+        - Arn:
+            Fn::GetAtt:
+              - "hsarchpatchmonitor"
+              - "Arn"
+          Id: "hsarchpatchmonitorID"
+
+
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    DependsOn: EventBridgeRule
+    Properties:
+      FunctionName:
+        Ref: "hsarchpatchmonitor"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn:
+        Fn::GetAtt:
+          - "EventBridgeRule"
+          - "Arn"
+
+
+Outputs:
+  hsarchpatchmonitor:
+    Description: "hsarchpatchmonitor lambda Function ARN"
+    Value: !GetAtt hsarchpatchmonitor.Arn
+  LambdaRole:
+    Description: "Implicit IAM Role created for LambdaRole"
+    Value: !GetAtt LambdaRole.Arn

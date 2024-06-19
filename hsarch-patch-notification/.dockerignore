@@ -1,0 +1,9 @@
+.dockerignore
+Dockerfile
+Dockerfile-Build
+Dockerfile-test
+.pytest_cache
+template.yaml
+hsarch-patch-notification.yml
+event_payload.py
+venv

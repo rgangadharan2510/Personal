@@ -1,0 +1,9 @@
+.dockerignore
+Dockerfile
+Dockerfile-Build
+Dockerfile-test
+docker-compose.yaml
+.pytest_cache
+template.yaml
+venv
+accesskeyrotationflowdiagram.jpg

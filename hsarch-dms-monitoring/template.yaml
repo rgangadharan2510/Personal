@@ -1,0 +1,211 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SAM Template for hsarch DMS Monitoring
+  By: Annanay Joshi
+
+Globals:
+  Function:
+    Timeout: 300
+    MemorySize: 128
+
+Parameters:
+  Subnets:
+    Description: Subnets for lambda
+    Type: CommaDelimitedList
+    Default: subnet-0419ee49cb88df4bb
+  SecurityGroupIds:
+    Description: Security Group Ids for lambda
+    Type: CommaDelimitedList
+    Default: sg-0f9e4dfc04ceba8d6
+
+Resources:
+  hsarchDMSMonitoringStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: hsarchDMSMonitoringStream
+      ShardCount: 2
+      StreamEncryption:
+        EncryptionType: "KMS"
+        KeyId: "alias/aws/kinesis"
+      Tags:
+        - Key: APPACCESS
+          Value: hsarch
+        - Key: GROUP
+          Value: shs-hsarch
+        - Key: COSTCENTER
+          Value: 35027
+
+  hsarchCWLtoKinesisRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: "logs.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: hsarch-kinesis-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: kinesis:PutRecord
+                Resource: !Sub "arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/hsarchDMSMonitoringStream"
+      Tags:
+        - Key: APPACCESS
+          Value: hsarch
+        - Key: GROUP
+          Value: shs-hsarch
+        - Key: COSTCENTER
+          Value: 35027
+
+  hsarchLogsDestination:
+    Type: AWS::Logs::Destination
+    DependsOn: [hsarchDMSMonitoringStream, hsarchCWLtoKinesisRole]
+    Properties:
+      DestinationName: hsarch-Logs-Destination
+      RoleArn: !GetAtt hsarchCWLtoKinesisRole.Arn
+      TargetArn: !Sub "arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/hsarchDMSMonitoringStream"
+      DestinationPolicy: 
+        Fn::Sub: |
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Principal": {
+                  "AWS": "727514741929"
+                },
+                "Action": [
+                  "logs:PutSubscriptionFilter",
+                  "logs:PutAccountPolicy"
+                ],
+                "Resource": "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:destination:hsarch-Logs-Destination"
+              }
+            ]
+          }
+
+  hsarchSRLambdaDMSMonitoring:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: "sts:AssumeRole"
+      Path: /
+      Policies:
+        - PolicyName: hsarch-log-group-policy-for-different-account
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                  - logs:GetLogEvents
+                Resource: "arn:aws:logs:*:727514741929:log-group:dms-tasks-*"
+        - PolicyName: hsarch-dynamodb-data-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                Resource: "arn:aws:dynamodb:us-east-2:257676781382:table/shs_appaccess_info"
+        - PolicyName: hsarch-CW-createloggroup-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: logs:CreateLogGroup
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:257676781382:*"
+        - PolicyName: hsarch-CW-createlogstream-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:257676781382:log-group:/aws/lambda/hsarchDmsMonitoring:*"
+        - PolicyName: hsarch-VPCforlambda-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:CreateNetworkInterface
+                  - ec2:DeleteNetworkInterface
+                  - ec2:DescribeInstances
+                  - ec2:AttachNetworkInterface
+                Resource: "*"
+        - PolicyName: hsarch-sts-assume-role
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource:
+                  - "arn:aws:iam::727514741929:role/hsarch-DMSMonitoring-ExecutionRole"
+                  - "arn:aws:iam::257676781382:role/hsarch-DMSMonitoring-ExecutionRole"
+                  - "arn:aws:iam::523140806637:role/hsarch-DMSMonitoring-ExecutionRole"
+        - PolicyName: getKinesisStream
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kinesis:DescribeStream
+                  - kinesis:DescribeStreamSummary
+                  - kinesis:GetRecords
+                  - kinesis:GetShardIterator
+                  - kinesis:ListStreams
+                  - kinesis:ListShards
+                Resource: !GetAtt hsarchDMSMonitoringStream.Arn
+      Tags:
+        - Key: APPACCESS
+          Value: hsarch
+        - Key: GROUP
+          Value: shs-hsarch
+        - Key: COSTCENTER
+          Value: 35027
+
+  hsarchDmsMonitoring:
+    Type: AWS::Serverless::Function
+    DependsOn: hsarchSRLambdaDMSMonitoring
+    Properties:
+      PackageType: Image
+      FunctionName: hsarchDmsMonitoring
+      Architectures:
+        - x86_64
+      Role: !GetAtt hsarchSRLambdaDMSMonitoring.Arn
+      VpcConfig:
+        SecurityGroupIds: !Ref SecurityGroupIds
+        SubnetIds: !Ref Subnets
+      ImageConfig:
+        Command: ["src.index.lambda_handler"]
+      Tags:
+        APPACCESS: hsarch
+        GROUP: shs-hsarch
+        COSTCENTER: 35027
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: .
+      DockerTag: v1
+
+  hsarchDMSMonitorEventMapping:
+    Type: "AWS::Lambda::EventSourceMapping"
+    DependsOn: hsarchDmsMonitoring
+    Properties:
+      EventSourceArn: !GetAtt hsarchDMSMonitoringStream.Arn
+      FunctionName: !GetAtt hsarchDmsMonitoring.Arn
+      StartingPosition: LATEST
+      BatchSize: 100

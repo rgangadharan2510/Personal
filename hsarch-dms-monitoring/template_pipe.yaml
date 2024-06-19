@@ -1,0 +1,273 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SAM Template for hsarch DMS Monitoring
+  By: Annanay Joshi
+
+Globals:
+  Function:
+    Timeout: 300
+    MemorySize: 128
+
+Parameters:
+  Subnets:
+    Description: Subnets for lambda
+    Type: CommaDelimitedList
+    Default: subnet-0419ee49cb88df4bb
+  SecurityGroupIds:
+    Description: Security Group Ids for lambda
+    Type: CommaDelimitedList
+    Default: sg-0f9e4dfc04ceba8d6
+
+Resources:
+  hsarchDmsMonitoring:
+    Type: AWS::Serverless::Function
+    DependsOn: LambdaRole
+    Properties:
+      PackageType: Image
+      FunctionName: !Ref hsarchDmsMonitoring
+      Architectures:
+        - x86_64
+      Role: !GetAtt LambdaRole.Arn
+      VpcConfig:
+        SecurityGroupIds: !Ref SecurityGroupIds
+        SubnetIds: !Ref Subnets
+      ImageConfig:
+        Command: ["src.index.lambda_handler"]
+      Tags:
+        APPACCESS: hsarch
+        GROUP: shs-hsarch
+        COSTCENTER: 35027
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: .
+      DockerTag: v1
+  hsarchSRLambdaDMSMonitoring:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: !Ref hsarch-SR-Lambda-DMSMonitoring
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: /
+      Policies:
+        - PolicyName: hsarch-log-group-policy-for-different-account
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "logs:DescribeLogGroups"
+                  - "logs:DescribeLogStreams"
+                  - "logs:GetLogEvents"
+            Resource: "arn:aws:logs:*:727514741929:log-group:dms-tasks-*"
+        - PolicyName: hsarch-dynamodb-data-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "dynamodb:GetItem"
+                  - "dynamodb:Query"
+                Resource: "arn:aws:dynamodb:us-east-2:257676781382:table/shs_appaccess_info"
+        - PolicyName: hsarch-CW-createloggroup-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogGroup"
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:257676781382:*"
+        - PolicyName: hsarch-CW-createlogstream-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:257676781382:log-group:/aws/lambda/hsarchDmsMonitoring:*"
+        - PolicyName: hsarch-VPCforlambda-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "ec2:DescribeNetworkInterfaces"
+                  - "ec2:CreateNetworkInterface"
+                  - "ec2:DeleteNetworkInterface"
+                  - "ec2:DescribeInstances"
+                  - "ec2:AttachNetworkInterface"
+                Resource: "*"
+        - PolicyName: hsarch-sts-assume-role
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "sts:AssumeRole"
+                Resource:
+                  - "arn:aws:iam::727514741929:role/hsarch-DMSMonitoring-ExecutionRole"
+                  - "arn:aws:iam::257676781382:role/hsarch-DMSMonitoring-ExecutionRole"
+                  - "arn:aws:iam::523140806637:role/hsarch-DMSMonitoring-ExecutionRole"
+      Tags:
+        APPACCESS: hsarch
+        GROUP: shs-hsarch
+        COSTCENTER: 35027
+  hsarchDMSMonitoringStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: !Ref hsarchDMSMonitoringStream
+      ShardCount: 1
+      Tags:
+        APPACCESS: hsarch
+        GROUP: shs-hsarch
+        COSTCENTER: 35027
+  hsarchDMSMonitoringPipeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref hsarchDMSMonitoringPipeRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: pipes.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceArn:
+                  Fn::Sub: >-
+                    arn:${AWS::Partition}:pipes:${AWS::Region}:${AWS::AccountId}:pipe/hsarchDMSMonitoring-pipe
+                aws:SourceAccount:
+                  Fn::Sub: ${AWS::AccountId}
+      Tags:
+        APPACCESS: hsarch
+        GROUP: shs-hsarch
+        COSTCENTER: 35027
+  hsarchPipeRolePolicyToInvokeLambda:
+    Type: AWS::IAM::RolePolicy
+    Properties:
+      PolicyName: ToCreateLambdaTargetByPipe
+      RoleName:
+        Ref: !Ref hsarchDMSMonitoringPipeRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - lambda:InvokeFunction
+            Resource:
+              - Fn::Sub: >-
+                  arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:hsarchDmsMonitoring
+      Tags:
+        APPACCESS: hsarch
+        GROUP: shs-hsarch
+        COSTCENTER: 35027
+  hsarchPipeRolePolicyForKinesis:
+    Type: AWS::IAM::RolePolicy
+    Properties:
+      PolicyName: PermissiontoAccessStream
+      RoleName:
+        Ref: !Ref hsarchDMSMonitoringPipeRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - kinesis:DescribeStream
+              - kinesis:DescribeStreamSummary
+              - kinesis:GetRecords
+              - kinesis:GetShardIterator
+              - kinesis:ListStreams
+              - kinesis:ListShards
+            Resource:
+              - Fn::Sub: >-
+                  arn:${AWS::Partition}:kinesis:${AWS::Region}:${AWS::AccountId}:stream/hsarchDmsMonitoring-data-stream
+      Tags:
+        APPACCESS: hsarch
+        GROUP: shs-hsarch
+        COSTCENTER: 35027
+  hsarchDmsMonitoringEventPipe:
+    Type: AWS::Pipes::Pipe
+    DependsOn:
+      - !Ref hsarchDMSMonitoringPipeRole
+      - !Ref hsarchPipeRolePolicyToInvokeLambda
+      - !Ref hsarchPipeRolePolicyForKinesis
+    Properties:
+      RoleArn:
+        Fn::GetAtt:
+          - !Ref hsarchDMSMonitoringPipeRole
+          - Arn
+      Name: !Ref hsarchDmsMonitoringEventPipe
+      DesiredState: RUNNING
+      Source:
+        Fn::Sub: >-
+          arn:${AWS::Partition}:kinesis:${AWS::Region}:${AWS::AccountId}:stream/hsarchDmsMonitoring-data-stream
+      SourceParameters:
+        KinesisStreamParameters:
+          BatchSize: 1
+          StartingPosition: LATEST
+      LogConfiguration:
+        CloudwatchLogsLogDestination:
+          LogGroupArn:
+            Fn::Sub: >-
+              arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/vendedlogs/pipes/hsarchDMSMonitoringEventPipe
+        Level: ERROR
+      TargetParameters: {}
+      Target:
+        Fn::Sub: >-
+          arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:hsarchDmsMonitoring
+      Tags:
+        APPACCESS: hsarch
+        GROUP: shs-hsarch
+        COSTCENTER: 35027
+  hsarchCWLtoKinesisRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref hsarchCWLtoKinesisRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "logs.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+            Condition:
+              StringLike:
+                aws:SourceArn:
+                  - "arn:aws:logs:us-east-2:727514741929:*"
+                  - "arn:aws:logs:us-east-2:257676781382:*"
+      Policies:
+        - PolicyName: hsarch-kinesis-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kinesis:PutRecord
+                Resource: "arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/hsarchDmsMonitoring-data-stream"
+      Tags:
+        APPACCESS: hsarch
+        GROUP: shs-hsarch
+        COSTCENTER: 35027
+  hsarchLogsDestination:
+    Type: AWS::Logs::Destination
+    Properties:
+      DestinationName: !Ref hsarchLogsDestination
+      RoleArn: arn:aws:iam::${AWS::AccountId}:role/hsarchCWLtoKinesisRole
+      TargetArn: "arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/hsarchDmsMonitoring-data-stream"
+      DestinationPolicy: >
+        {"Version" : "2012-10-17","Statement" : [{"Effect" : "Allow", "Principal" : {"AWS" : "logs.amazonaws.com"}, "Action" : ["logs:PutSubscriptionFilter","logs:PutAccountPolicy"], "Resource" : "arn:aws:logs:us-east-2:257676781382:destination:hsarchDMSMonitoringStream"}]}
+      Tags:
+        APPACCESS: hsarch
+        GROUP: shs-hsarch
+        COSTCENTER: 35027
