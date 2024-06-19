@@ -1,0 +1,151 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  SAM Template for hsarch-patch-notification
+  By :- Rahul Gangadharan
+
+Globals:
+  Function:
+    Timeout: 300
+    MemorySize: 128
+
+Parameters:
+  Subnets:
+    Description: Subnets for lambda
+    Type: CommaDelimitedList
+    Default: subnet-0419ee49cb88df4bb
+  SecurityGroupIds:
+    Description: Security Group Ids for lambda
+    Type: CommaDelimitedList
+    Default: sg-0f9e4dfc04ceba8d6
+
+Resources:
+  hsarchpatchnotification:
+    Type: AWS::Serverless::Function
+    DependsOn: LambdaRole
+    Properties:
+      PackageType: Image
+      FunctionName: hsarch-patch-notification
+      Architectures:
+        - x86_64
+      Role:  !GetAtt LambdaRole.Arn
+      VpcConfig:
+        SecurityGroupIds: !Ref SecurityGroupIds
+        SubnetIds: !Ref Subnets
+      ImageConfig:
+        Command: [ "src.index.lambda_handler" ]
+      Environment:
+        Variables:
+          EXPIRATION_TIME: '15'
+    Metadata:
+      Dockerfile: Dockerfile
+      DockerContext: .
+      DockerTag: v1
+
+  LambdaRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub 'hsarch-patch-notification-role-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: hsarch-CW-createloggroup-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:257676781382:*'
+        - PolicyName: hsarch-CW-createlogstream-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:257676781382:log-group:/aws/lambda/hsarch-patch-notification:*'
+        - PolicyName: hsarch-assumerole-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'sts:AssumeRole'
+                Resource: 'arn:aws:iam::*:role/hsarch-patch-monitor'
+        - PolicyName: hsarch-VPCforlambda-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ec2:DescribeNetworkInterfaces'
+                  - 'ec2:CreateNetworkInterface'
+                  - 'ec2:DeleteNetworkInterface'
+                  - 'ec2:DescribeInstances'
+                  - 'ec2:AttachNetworkInterface'
+                Resource: '*'
+  EventBridgeRule:
+    Type: AWS::Scheduler::Schedule
+    DependsOn: SchedulerScheduleRole
+    Properties:
+      Description: Schedule to run every day
+      FlexibleTimeWindow: 
+        Mode: "OFF"
+      Name: hsarch-patch-notification-schedule
+      ScheduleExpression: rate(24 hours)
+      State: ENABLED
+      Target: 
+        Arn:
+          Fn::GetAtt:
+            - "hsarchpatchnotification"
+            - "Arn"
+        RoleArn: 
+              Fn::GetAtt:
+                - "SchedulerScheduleRole"
+                - "Arn"
+
+
+  SchedulerScheduleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Role to attach allow lambda invocation
+      RoleName: !Sub 'hsarch-patch-notification-sched-role-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - scheduler.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub 'hsarch-patch-notification-sched-policy-${AWS::Region}'
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: "lambda:InvokeFunction"
+                Resource:
+                  Fn::GetAtt:
+                    - hsarchpatchnotification
+                    - Arn
+
+
+Outputs:
+  hsarchpatchnotification:
+    Description: "hsarchpatchnotification lambda Function ARN"
+    Value: !GetAtt hsarchpatchnotification.Arn
+  LambdaRole:
+    Description: "Implicit IAM Role created for LambdaRole"
+    Value: !GetAtt LambdaRole.Arn
